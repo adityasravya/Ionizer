@@ -1,0 +1,97 @@
+/*
+  Basic Ticker usage
+
+  Ticker is an object that will call a given function with a certain period.
+  Each Ticker calls one function. You can have as many Tickers as you like,
+  memory being the only limitation.
+
+  A function may be attached to a ticker and detached from the ticker.
+  There are two variants of the attach function: attach and attach_ms.
+  The first one takes period in seconds, the second one in milliseconds.
+
+  The built-in LED will be blinking.
+*/
+
+#include <Ticker.h>
+#include <EEPROM.h>
+
+
+Ticker UV_Timer;
+
+int count = 0;
+int one_sec;
+bool state_change, previous;
+
+
+/*
+ * Loop to run Ticker for it's set time
+ */
+void counter_run() {
+    // Increment the counter only if case 1 or case 2 triggered
+    state_change= ~state_change;
+    count++;
+
+}
+
+void setup() {
+  Serial.begin(115200);
+  EEPROM.begin(512);
+  //call this only once
+  //empty_eeprom();
+  count = UV_lamp_byte_read();
+  Serial.print("Read EEPROM =");
+  Serial.println(count);
+  // Start timer
+  UV_Timer.attach(one_sec, counter_run);
+
+}
+
+void loop() {
+  int read_eeprom;
+  if((state_change != previous))
+  {
+    previous =state_change;
+  UV_time_byte_write(count);
+  Serial.print("Write EEPROM =");
+  Serial.println(count); 
+  read_eeprom = UV_lamp_byte_read(); 
+  Serial.print("Read EEPROM =");
+  Serial.println(read_eeprom);
+  } 
+
+}
+
+
+
+/*
+ * Read from eeprom for int
+ */
+int UV_lamp_byte_read(void)
+{
+  return (EEPROM.read(0) << 8) + EEPROM.read(1);
+}
+
+/*
+ * Write to eeprom for int
+ */
+void UV_time_byte_write(int value)
+{
+  EEPROM.write(0, value >> 8);
+  EEPROM.write(1, value & 0xFF);
+   if (EEPROM.commit()) {
+      Serial.println("EEPROM successfully committed");
+    } else {
+      Serial.println("ERROR! EEPROM commit failed");
+    }
+}
+
+/*
+ * Empty eeprom only  once before the start of the fist microcontroller write
+ */
+void empty_eeprom(void)
+{
+  int empty = 0;
+  for(empty =0; empty<512; empty++)
+  EEPROM.write(empty, 0);
+}
+
