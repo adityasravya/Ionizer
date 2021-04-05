@@ -1,97 +1,181 @@
 /*
-  Basic Ticker usage
-
-  Ticker is an object that will call a given function with a certain period.
-  Each Ticker calls one function. You can have as many Tickers as you like,
-  memory being the only limitation.
-
-  A function may be attached to a ticker and detached from the ticker.
-  There are two variants of the attach function: attach and attach_ms.
-  The first one takes period in seconds, the second one in milliseconds.
-
-  The built-in LED will be blinking.
-*/
-
-#include <Ticker.h>
-#include <EEPROM.h>
-
-
-Ticker UV_Timer;
-
-int count = 0;
-int one_sec;
-bool state_change, previous;
+ * Date: 17 March 2021
+ * AEREM 100 Virus Hunter with Node MCU ESP8266
+ */
 
 
 /*
- * Loop to run Ticker for it's set time
+ * Include Libraries for EEPROM and Node MCU ESP8266 Wifi Board
  */
-void counter_run() {
-    // Increment the counter only if case 1 or case 2 triggered
-    state_change= ~state_change;
-    count++;
-
-}
-
-void setup() {
-  Serial.begin(115200);
-  EEPROM.begin(512);
-  //call this only once
-  //empty_eeprom();
-  count = UV_lamp_byte_read();
-  Serial.print("Read EEPROM =");
-  Serial.println(count);
-  // Start timer
-  UV_Timer.attach(one_sec, counter_run);
-
-}
-
-void loop() {
-  int read_eeprom;
-  if((state_change != previous))
-  {
-    previous =state_change;
-  UV_time_byte_write(count);
-  Serial.print("Write EEPROM =");
-  Serial.println(count); 
-  read_eeprom = UV_lamp_byte_read(); 
-  Serial.print("Read EEPROM =");
-  Serial.println(read_eeprom);
-  } 
-
-}
-
+#include <ESP8266WiFi.h>                                            
+#include <EEPROM.h>  
 
 
 /*
- * Read from eeprom for int
+ * 'const' is a variable qualifier that modifies the behavior of the variable, making a variable "read-only"
+ * This means that the variable can be used just as any other variable of its type, but its value cannot be changed.
  */
-int UV_lamp_byte_read(void)
+const byte Control_Key =5;        //GPIO 5 (D1/SCL) of Node MCU ESP8266 is assigned to Push Button of AEREM 100 named as "Control_Key"
+const byte Fan = 4;               //GPIO 4 (D2/SDA) of Node MCU ESP8266 is assigned to BLDC 12V Fan of AEREM 100 named as "Fan"
+const byte Blue_LED = 12;         //GPIO 12(D6/HMISO) of Node MCU ESP8266 is assigned to Blue LED's of AEREM 100 named as "Blue_LED"       
+const byte Red_LED = 14 ;         //GPIO 14(D5/HSCLK) of Node MCU ESP8266 is assigned to Red LED's of AEREM 100 named as "Red_LED"
+           
+
+/*
+ * Global Variables for Push Button Fuctionality
+ */
+unsigned short int counter=0;            //Declare 'counter' as a Global variable to store the count of key press              
+bool state=0, previous=0;                //To hold the previous and current state of Push Button  
+
+/*
+ * Global Variables for UV Lamp On Time Calculation Fuctionality
+ */
+unsigned int long UV_Start=0;            //Holds Start Time of UV lamp in Case 1: AEREM 100 ON  
+unsigned int long UV_Stop=0;             //Holds Stop Time of UV lamp in Case 3: AEREM 100 OFF 
+unsigned int UV_On_Min=0;                //Holds No of Minutes UV Lamp has opearated during each AEREM 100 ON-OFF cycle. No of Minutes in 2 years is 1051200 
+unsigned int Cumulative_UV_Ontime=0;     //Holds cumulative On time of UV lamp so for
+
+
+/*
+ * With ICACHE_RAM_ATTR you put the function on the RAM.
+ * With ICACHE_FLASH_ATTR you put the function on the FLASH (to save RAM).
+ * Interrupt functions should use the ICACHE_RAM_ATTR. Function that are called often, should not use any cache attribute.
+ */
+void ICACHE_RAM_ATTR Push_Button();   
+
+
+void setup(){
+      Serial.begin(115200);   //Tells the ESP8266 to get ready to exchange messages with the Serial Monitor at a data rate of 115200 bits per second.   
+      EEPROM.begin(512);      //EEPROM.begin(size): size being the number of bytes we want to use. 
+                           
+
+      /*
+       * Setting Mode of GPIO Pins of Node MCU ESP8266 as INPUT/OUTPUT/INPUT PULLUP
+       */
+      pinMode(Control_Key,INPUT_PULLUP);  //Push Button as INPUT_PULLUP
+      pinMode(Blue_LED,OUTPUT);           //Blue LEDs as Output
+      pinMode(Red_LED,OUTPUT);            //Red LEDs as Output
+      pinMode(Fan,OUTPUT);                //Fan as Output
+
+      /* 
+       * Declaring the Initial Stages for Both(BLUE & RED) LEDs.
+       */
+      digitalWrite(Blue_LED,HIGH);       //Blue LEDs OFF
+      digitalWrite(Red_LED,HIGH);        //Red LEDs OFF
+
+      /*
+       * External Interrupt to trigger Node MCU ESP8266 whenever Rising Edge(Low to High)occurs due to pressing of Push Button of AEREM 100.
+       * Syntax : attachInterrupt(digitalPinToInterrupt(pin), ISR, mode)
+       */
+      attachInterrupt(digitalPinToInterrupt(Control_Key),Push_Button,RISING);     
+}
+
+void Push_Button()
 {
-  return (EEPROM.read(0) << 8) + EEPROM.read(1);
+     state = !state;            
 }
 
-/*
- * Write to eeprom for int
- */
-void UV_time_byte_write(int value)
-{
-  EEPROM.write(0, value >> 8);
-  EEPROM.write(1, value & 0xFF);
-   if (EEPROM.commit()) {
-      Serial.println("EEPROM successfully committed");
-    } else {
-      Serial.println("ERROR! EEPROM commit failed");
-    }
-}
+void loop(){
+       if(state!= previous){
+           previous = state;                             
+           counter++;                                 
+              
+           switch(counter){
+               case 1:{
+                    Serial.println("\n"); 
+                    Serial.println("Case 1:AEREM 100 ON");        //Msg on Serial Port indicating AEREM 100 is ON
+                    
+                    /*
+                     * Taking Back up of Last UV ON time value (in minutes) from EEPROM and Printing it on console
+                     */ 
+                    UV_On_Min = EEPROM.get(0,UV_On_Min);          //Take back up from EEPROM of UV on time in minutes from last AEREM 100 ON-OFF cycle.
+                    Serial.println("Previous cycle UV On Time");       
+                    Serial.println(UV_On_Min);                   //Printing last cycle UV on time on Console.
 
-/*
- * Empty eeprom only  once before the start of the fist microcontroller write
- */
-void empty_eeprom(void)
-{
-  int empty = 0;
-  for(empty =0; empty<512; empty++)
-  EEPROM.write(empty, 0);
-}
 
+                    /*
+                     * Calculating Cumulative UV ON time and Printing it on console
+                     */ 
+                    Serial.println("Cumulative UV on time");
+                    Cumulative_UV_Ontime = Cumulative_UV_Ontime + UV_On_Min;  //Calculate Cumulative UV ON time
+                    Serial.println(Cumulative_UV_Ontime);                     //Printing Cumulative UV ON time on console
+
+                    
+                    /*
+                     * Turn ON Blue LED's, Negative Ion Generator and Fan.
+                     * analogWrite(value can be set from 0 to 255) as per need of Speed Control
+                     * Fan,UV and Ion generator are connected on PCB
+                     */       
+                    digitalWrite(Blue_LED,LOW);            //Blue LEDs ON
+                    analogWrite(Fan,180);                  //Fan at Low Speed
+
+                    /*
+                     * Keeping track of time at which UV lamp has turned ON
+                     */  
+                    UV_Start=millis();                    //Once UV lamp is ON take reading of its start time 
+                    break;
+              }
+                     
+               case 2:{
+                    Serial.println("\n"); 
+                    Serial.println("Case 2: Hunter Mode "); //Msg on Serial Port indicating AEREM 100 is in HUNTER mode
+
+                    /*
+                     * Turn ON Red LED's, Negative Ion Generator and Fan.
+                     * analogWrite(value can be set from 0 to 255) as per need of Speed Control
+                     * Fan,UV and Ion generator are connected on PCB
+                     */
+                     digitalWrite(Blue_LED,HIGH);           
+                     digitalWrite(Red_LED,LOW);
+                     analogWrite(Fan,255); 
+                     break;
+               }
+                     
+               case 3:{
+                
+                     Serial.println("\n");       
+                     Serial.println("Case 3: AEREM 100 OFF ");         //Msg on Serial Port indicating AEREM 100 is OFF
+
+                     /*
+                      * Turn OFF Blue LED's, Red LED's, Negative Ion Generator ,UV lamp and Fan.
+                      */
+                     digitalWrite(Blue_LED,HIGH);       
+                     digitalWrite(Red_LED,HIGH);    
+                     digitalWrite(Fan,LOW); 
+
+                     /*
+                      * Keeping track of time at which UV lamp has turned OFF
+                      */
+                     
+                     UV_Stop = millis();                             //Once UV lamp is OFF take reading of its stop time 
+
+                     /*
+                      * Calculating UV on time in minutes and Printing on console
+                      */
+                     UV_On_Min =((UV_Stop-UV_Start)/1000)/60;       //converting millisecondts to minutes
+//                     Serial.println("UV On Time in Minutes during this cycle:");
+//                     Serial.println(UV_On_Min); 
+
+                          
+                     /*
+                      * Writing Calculated UV ON time for current AEREM 100 ON-OFF cycle to EEPROM
+                      */
+                     EEPROM.put(0,UV_On_Min);
+//                   if(EEPROM.commit())
+//                         Serial.println("EEPROM Successfully Committed");
+//                   else 
+//                         Serial.println("ERROR! EEPROM commit failed");
+
+                          
+                     counter =0;                             //Reset the counter to 0 so that for next button press AEREM 100 can again start from case 1
+                     break;
+               }
+                
+               default:
+                      {
+                          counter =0;                        //if no match make the counter zero
+                          break;
+                      }
+            }                                               //switch case ends
+        }                                                   //if loop ends
+}                                                           //void loop ends

@@ -1,0 +1,74 @@
+#include <ESP8266WiFi.h>
+#include <WiFiManager.h>
+
+WiFiClient client;
+WiFiServer server(80);
+
+const byte Control_Key =5;        //GPIO 5 (D1/SCL) of Node MCU ESP8266 is assigned to Push Button of AEREM 100 named as "Control_Key"
+const byte Fan = 4;               //GPIO 4 (D2/SDA) of Node MCU ESP8266 is assigned to BLDC 12V Fan of AEREM 100 named as "Fan"
+const byte Blue_LED = 12;         //GPIO 12(D6/HMISO) of Node MCU ESP8266 is assigned to Blue LED's of AEREM 100 named as "Blue_LED"       
+const byte Red_LED = 14 ;         //GPIO 14(D5/HSCLK) of Node MCU ESP8266 is assigned to Red LED's of AEREM 100 named as "Red_LED"
+
+void setup(){
+        Serial.begin(115200);
+        WiFiManager wifiManager;
+        wifiManager.autoConnect("ESP8266_SHWETA");
+      
+        server.begin();
+  
+        pinMode(Control_Key,INPUT_PULLUP);  //Push Button as INPUT_PULLUP
+        pinMode(Blue_LED,OUTPUT);           //Blue LEDs as Output
+        pinMode(Red_LED,OUTPUT);            //Red LEDs as Output
+        pinMode(Fan,OUTPUT);                //Fan as Output
+
+}
+
+void loop() {
+        client = server.available();  //Gets a client that is connected to the server and has data available for reading.    
+        if (client == 1){ 
+             String request =  client.readStringUntil('\r');
+             Serial.println(request);
+             request.trim();
+    
+            if(request == "GET /mode1on HTTP/1.1"){
+                   digitalWrite(Red_LED,HIGH);
+                   digitalWrite(Blue_LED,LOW);              //Blue LEDs ON
+                   analogWrite(Fan,255);                    //Fan at Low Speed
+            }
+    
+            if(request == "GET /mode1off HTTP/1.1"){
+                   digitalWrite(Blue_LED,HIGH);              //Blue LEDs ON
+                   digitalWrite(Red_LED,HIGH);
+                   analogWrite(Fan,0);                    //Fan at Low Speed
+            }
+        
+            if(request == "GET /mode2on HTTP/1.1"){
+                   digitalWrite(Blue_LED,HIGH);           
+                   digitalWrite(Red_LED,LOW);
+                   analogWrite(Fan,1023); 
+            }
+        
+            if(request == "GET /mode2off HTTP/1.1"){
+                   digitalWrite(Blue_LED,HIGH);              //Blue LEDs ON
+                   digitalWrite(Red_LED,HIGH);
+                   analogWrite(Fan,0);
+                   
+            }
+       }
+
+        // Return the response
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: text/html");
+        client.println("");
+        
+        client.println("<!DOCTYPE HTML>");
+        client.println("<html>");
+        client.println("<h1>AEREM 100</h1>");
+        client.println("<h3>The Virus Hunter<h3>");
+        client.println("<br>");
+        client.println("<a href=\"/mode1on\"\"><button>AEREM 100 ON</button></a>");
+        client.println("<a href=\"/mode1off\"\"><button>AEREM 100 OFF</button></a><br/>");
+        client.println("<a href=\"/mode2on\"\"><button>Hunter ON</button></a>");
+        client.println("<a href=\"/mode2off\"\"><button>Hunter OFF</button></a><br/>");
+        client.println("</html>");
+}
