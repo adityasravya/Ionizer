@@ -1,0 +1,317 @@
+#include <OneButton.h>                                     // It supports detecting events like single, double, multiple clicks and long-time pressing.
+#include <EEPROM.h>                                        // fuctions : read(),write(),update(),get(),put()
+#include <ESP8266WiFi.h>                                   // https://github.com/esp8266/Arduino
+#include <DNSServer.h>                                     // A simple DNS server for ESP8266. This library implements a simple DNS server.
+#include <ESP8266WebServer.h>                              // knows how to handle GET and POST.
+#include <WiFiManager.h>                                   // https://github.com/tzapu/WiFiManager. for configuration of WiFi credentials using a Captive Portal.
+#include <FS.h>                                            // FS.h - file system wrapper.This file is part of the esp8266 core for Arduino environment.
+#include <ArduinoJson.h>                                   // https://github.com/bblanchon/ArduinoJson
+#include <PubSubClient.h>                                  // A client library for MQTT messaging. ... This library allows you to send and receive MQTT messages.
+#include <PubSubClientTools.h>                             // Provides useful tools for PubSubClient
+#include <Thread.h>                                        // https://github.com/ivanseidel/ArduinoThread......Simplest kernel for multythreading.
+#include <ThreadController.h>
+#include <Ticker.h>                                        //A library for creating Tickers which can call repeating functions.
+
+WiFiClient espClient;                                      //Creates a client that can connect to to a specified internet IP address and port as defined in client.connect().
+char* MQTT_SERVER = "65.2.59.83";
+PubSubClient client(MQTT_SERVER, 1883, espClient);         //Parameters(server IPAddress,port,the network client to use i.e WiFiClient)
+PubSubClientTools mqtt(client);
+
+ThreadController threadControl = ThreadController();
+Thread thread = Thread();
+
+Ticker ticker;           
+                               
+IPAddress server(65, 0, 109, 93);
+
+#define PIN_INPUT 5                    			   //connect the pushbutton on pin number D1 or GPIO 4
+#define MAXUVTIME 5                                        // UV Life cycle for 600000
+
+/*Declare the global variable here*/
+const byte Fan = 4;                    			   //GPIO 4 (D2/SDA) of Node MCU ESP8266 is assigned to BLDC 12V Fan of AEREM 100 named as "Fan"
+const byte Blue_LED = 14;             			   //GPIO 12(D6/HMISO) of Node MCU ESP8266 is assigned to Blue LED's of AEREM 100 named as "Blue_LED"
+const byte Red_LED = 12 ;            			   //GPIO 14(D5/HSCLK) of Node MCU ESP8266 is assigned to Red LED's of AEREM 100 named as "Red_LED"       
+        
+float Cumulative_UV_Ontime = 0;       			   //total UV ON time so far
+unsigned long startTime = 0;           			   //start the millis in long press
+float uv_timeS1 = 0;                                       //variable to store the time in eeprom in single click
+unsigned long uv_timeS = 0;                                //take a varibale to store the millis time
+
+int singleclick = 0;                    		   //take a variable to check weather it is on of off
+int doubleclick = 0;                       		   //take a variable to check weather the time is store in eeprom or not
+unsigned long pressStartTime;                              //take a variable to stor the millis value
+
+
+bool wifi_mqtt_enabled = 0;
+int device_status =0;
+OneButton button(PIN_INPUT, true);
+
+//flag for saving data
+bool shouldSaveConfig = false;
+
+/*MQTT setting*/
+char mqtt_server[40] = "65.2.59.83";
+char mqtt_port[6] = "1883";
+
+
+
+//callback notifying us of the need to save config
+void saveConfigCallback() {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+
+
+void wifi_manager_setup(void);
+void wifi_mqtt_setup(void);
+void clear_eeprom(void);
+void uv_lamp_op(void);
+void ion_on_off(void);
+
+
+void tick(){
+  	//toggle state
+  	int state = digitalRead(BUILTIN_LED);  // get the current state of GPIO1 pin
+  	digitalWrite(BUILTIN_LED, !state);     // set pin to the opposite state
+}
+
+//gets called when WiFiManager enters configuration mode
+void configModeCallback (WiFiManager *myWiFiManager) {
+  	Serial.println("Entered config mode");
+  	Serial.println(WiFi.softAPIP());
+
+  	//if you used auto generated SSID, print it
+  	Serial.println(myWiFiManager->getConfigPortalSSID());
+  	//entered config mode, make led toggle faster
+  	ticker.attach(0.2, tick);
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  	Serial.print("Message arrived [");
+  	Serial.print(topic);
+  	Serial.print("] ");
+
+  	for (int i=0;i<length;i++) {
+    		Serial.print((char)payload[i]);
+    		if((char)payload[i] == '1'){
+      			ion_on_off();
+    		}	
+ 
+    		else if((char)payload[i] == '2'){
+      			uv_lamp_op();
+   		}	
+  	}
+  	Serial.println();
+}
+
+
+
+ICACHE_RAM_ATTR void checkTicks()      //attach the ram attribute
+{
+  button.tick();                       //check the button ticks
+}
+
+
+void singleClick(){
+  	ion_on_off();
+}
+
+void ion_on_off(void){
+  	if(doubleclick == 1){                                    		//if doubleclick is equal to one then store the uv lamp time in eeprom
+ 		unsigned long endTime = millis();                      		//start the millis
+  		unsigned long uv_timeS = (endTime - startTime);                 //No need of global
+  		uv_timeS1 = (uv_timeS/1000) / 60;                    		//convert the millis in minute
+  		Serial.print("uv_time_in_minuteS = ");
+  		Serial.println(uv_timeS1);                              	//print the uv_time3 and see for how much time our is on at high high speed
+
+  		EEPROM.put(0, uv_timeS1);                               	//sotre the minute in eeprom
+  		if (EEPROM.commit()){                                     	//check weather the data is save in eeprom or not
+   			 Serial.println("EEPROM Successfully Committed");
+		}       
+  		else{
+  			  Serial.println("ERROR! EEPROM commit failed");
+		}
+   		doubleclick = 0;
+  	}
+
+  	if(singleclick == 0){
+  		Serial.println("Ioniser turn on");
+ 		digitalWrite(Blue_LED, LOW);                      		//turn on the blue led
+  		digitalWrite(Red_LED, HIGH);                     		//turn off the red led
+ 		analogWrite(Fan, 300);
+  		singleclick = 1;
+  		device_status = 1;                				// device ON
+ 	}
+  	else{
+  		Serial.println("ioniser turn off");
+  		digitalWrite(Blue_LED, HIGH);                     //turn off the blue led
+  		digitalWrite(Red_LED, HIGH);                      //turn off the red led
+  		analogWrite(Fan, LOW);                            //turn off the fan
+  		singleclick = 0;
+  		device_status = 0;                                //device off
+  	}  
+}
+
+void doubleClick(){
+    	uv_lamp_op();                                   
+}
+
+void uv_lamp_op(void){
+  	unsigned int long uv_timeD = EEPROM.get(0, uv_timeS1);                //read the eeprom
+
+  	Serial.print("Previous cycle uv_timeD = ");
+        Serial.println(uv_timeD);                                	      // print the eeprom value
+
+ 	Cumulative_UV_Ontime = (Cumulative_UV_Ontime + uv_timeD);   	     //store the previous and current value of eeprom
+  	Serial.print("Cumulative_UV_Ontime = ");
+  	Serial.println(Cumulative_UV_Ontime);                                //print the how uch values are store in eeprom
+
+  	startTime = millis();                                                //start the millis
+  	Serial.println("doubleClick() detected.");
+
+  	digitalWrite(Blue_LED, HIGH);                               	    //turn off the blue led
+  	digitalWrite(Red_LED, LOW);                                 	    //turn on the red led
+  	analogWrite(Fan, 1023);                                             // fan at high speed
+  	doubleclick = 1;  
+ 	singleclick = 1;
+  	device_status = 2;                                                  // UV ON
+}
+
+void multiClick(){
+  	unsigned int buttonclicks;
+  	Serial.print("multiClick(");
+
+  	buttonclicks = button.getNumberClicks();
+  	Serial.print(button.getNumberClicks());
+  	Serial.println(") detected.");
+  
+	if(buttonclicks >5){
+    		WiFiManager wifiManager;
+   		wifiManager.resetSettings();
+    		Serial.println("Reset wifi");
+   	}
+} 
+
+void pressStart(){
+  	Serial.println("pressStart()");
+  	pressStartTime = millis() - 1000;                                // as set in setPressTicks()
+} 
+
+
+void pressStop(){
+  	unsigned long diff_time;
+  	Serial.print("pressStop(");
+  	diff_time = millis() - pressStartTime;
+  	Serial.print(diff_time);
+  	Serial.println(") detected.");
+  	
+	if((diff_time> 5000) && (diff_time<10000)) 			//Long press
+  		clear_eeprom();
+  	
+	if(diff_time> 10000)  //Long long press
+  		wifi_manager_setup();
+} 
+
+
+void setup(){
+ 	 Serial.begin(115200);                                	//initialize the baudrate
+  	 pinMode(BUILTIN_LED, OUTPUT);
+  	 pinMode(Blue_LED, OUTPUT);                             // sets the blue led as output
+ 	 pinMode(Red_LED, OUTPUT);                              //set the red led as output
+ 	 pinMode(Fan, OUTPUT);                                  //set the fan as the output
+
+  	 digitalWrite(Blue_LED, HIGH);                       	//turn off the blue led
+ 	 digitalWrite(Red_LED, HIGH);                        	//turn off the red led                  
+ 	 digitalWrite(BUILTIN_LED, HIGH);
+ 	 analogWrite(Fan, LOW);                               	//turn off the fan
+ 	 EEPROM.begin(512);                                  	//start the eeprom
+  
+  	attachInterrupt(digitalPinToInterrupt(PIN_INPUT), checkTicks, CHANGE);     //attach trhe interrupt on pin 5
+  	button.attachClick(singleClick);                                           //call the singleclick fn
+  	button.attachDoubleClick(doubleClick);                                     //call the double click fn
+  	button.attachMultiClick(multiClick);                                       // future use
+  	
+	button.setPressTicks(1000);
+  	button.attachLongPressStart(pressStart);
+  	button.attachLongPressStop(pressStop);                                     //call the stop press fn
+}
+
+
+void wifi_manager_setup(void){
+  	ticker.attach(0.6, tick);
+	WiFiManager wifiManager;
+
+  	//set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
+ 	 wifiManager.setAPCallback(configModeCallback);
+
+  	if (!wifiManager.autoConnect("AEREM100","12345678")) {
+    		Serial.println("failed to connect and hit timeout");
+    		ESP.reset();
+    		delay(1000);
+  	}
+  
+  	wifi_mqtt_enabled =1;
+  	mqtt_connection();
+}
+
+void clear_eeprom(void){
+  	if(Cumulative_UV_Ontime > MAXUVTIME){
+ 		 for (int i = 0 ; i < EEPROM.length() ; i++){
+      			EEPROM.write(i, 0);                                     //reset the eeprom memory
+    		 }
+		 Serial.println("Eeprom Reset");
+    	         Cumulative_UV_Ontime = 0; 
+ 	}
+       else{
+  		 Serial.print("Time left = ");
+   		 Serial.println(MAX-Cumulative_UV_Ontime); 
+        }
+}
+
+
+
+void loop(){
+  	button.tick();
+  	client.setCallback(callback);
+ 	client.loop();
+  	threadControl.run();
+  	delay(10);
+}
+
+
+void mqtt_connection(void){
+	Serial.print("Connecting to MQTT ");
+  	if (client.connect("ESP8266Client")){
+    		Serial.println("CONNECTED");
+   		ticker.detach();
+    		digitalWrite(BUILTIN_LED, HIGH);
+
+    		mqtt.subscribe("recieve",  topic1_subscriber);
+    		client.subscribe("receive");
+  	} else {
+    		Serial.println("FAILED");
+  	}
+
+  	// Enable Thread
+ 	 thread.onRun(publisher);
+  	 thread.setInterval(2000);
+  	 threadControl.add(&thread);
+}
+
+void publisher() {
+  	mqtt.publish("testout", "Hello Aerem100!");
+  	update_status();
+}
+
+void topic1_subscriber(String topic, String message) {
+  Serial.println("Message arrived in function 1 ["+topic+"] "+message);
+}
+
+void update_status(void){
+  	if(device_status == 0)
+  		mqtt.publish("status", "OFF");
+  	else if(device_status == 1)
+  		mqtt.publish("status", "ON");
+  	else if(device_status == 2)
+  		mqtt.publish("status", "UV");
+}
